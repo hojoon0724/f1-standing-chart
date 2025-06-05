@@ -2,40 +2,88 @@ import axios from "axios";
 import { useEffect, useState } from "react";
 import drivers from "../../data/drivers.json";
 
-export default function Home() {
-  const [groupedData, setGroupedData] = useState({});
+// API Base URL
+const API_BASE = "https://api.openf1.org/v1";
 
-  const [meetings, setMeetings] = useState([]);
-  const [sessions, setSessions] = useState([]);
-  const [selectedSession, setSelectedSession] = useState(null);
+// Utility Functions
+const fetchAndSaveData = async (url, apiEndpoint, dataKey) => {
+  const response = await axios.get(url);
+  const data = response.data;
 
-  useEffect(() => {
-    const get2025Results = async () => {
-      const base = "https://api.openf1.org/v1";
+  await fetch(apiEndpoint, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ data }),
+  });
 
-      // Get all meetings from 2025
-      const meetingsRes = await axios.get(`${base}/meetings?year=2025`);
-      const meetings = meetingsRes.data;
+  return data;
+};
+
+const enrichDriverData = async (position, meetingKey) => {
+  let driverData = drivers.find(
+    (driver) => driver.driver_number === position.driver_number && driver.meeting_key === meetingKey
+  );
+
+  if (!driverData) {
+    driverData = await updateDriversData(position.driver_number, meetingKey);
+  }
+
+  return {
+    ...position,
+    driver_name: driverData?.full_name || "Unknown",
+    team_name: driverData?.team_name || "Unknown",
+    team_colour: `#${driverData?.team_colour}` || "000000",
+  };
+};
+
+const updateDriversData = async (missingDriverNumber, meetingKey) => {
+  try {
+    const driverRes = await axios.get(
+      `${API_BASE}/driver?driver_number=${missingDriverNumber}&meeting_key=${meetingKey}`
+    );
+    const newDriverData = driverRes.data;
+
+    if (newDriverData) {
+      const updatedDrivers = [...drivers, newDriverData];
 
       await fetch(`/api/sessionData`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
         },
-        body: JSON.stringify({ type: "meetings", data: meetings }),
+        body: JSON.stringify({ type: "drivers", data: updatedDrivers }),
       });
+
+      console.log("Driver data updated successfully.");
+      return newDriverData;
+    }
+  } catch (error) {
+    console.error("Error fetching or updating driver data:", error);
+  }
+
+  return { full_name: "Unknown", team_name: "Unknown", team_colour: "000000" };
+};
+
+// Main Component
+export default function Home() {
+  const [meetings, setMeetings] = useState([]);
+  const [sessions, setSessions] = useState([]);
+  const [selectedSession, setSelectedSession] = useState(null);
+
+  useEffect(() => {
+    const get2025Results = async () => {
+      const meetings = await fetchAndSaveData(`${API_BASE}/meetings?year=2025`, `/api/meetings`, "meetings");
 
       setMeetings(meetings);
 
-      // Get sessions for qualifying and race only
       const qualifyingAndRaceSessions = [];
 
       for (const meeting of meetings) {
-        const sessionsRes = await axios.get(`${base}/sessions?meeting_key=${meeting.meeting_key}`);
-        const sessions = sessionsRes.data;
-
+        const sessions = await axios.get(`${API_BASE}/sessions?meeting_key=${meeting.meeting_key}`);
         qualifyingAndRaceSessions.push(
-          ...sessions.filter((session) => session.session_name === "Qualifying" || session.session_name === "Race")
+          ...sessions.data.filter((session) => session.session_name === "Qualifying" || session.session_name === "Race")
         );
       }
 
@@ -45,67 +93,16 @@ export default function Home() {
     get2025Results().catch(console.error);
   }, []);
 
-  const updateDriversData = async (missingDriverNumber, meetingKey) => {
-    const base = "https://api.openf1.org/v1";
-
-    try {
-      const driverRes = await axios.get(
-        `${base}/driver?driver_number=${missingDriverNumber}&meeting_key=${meetingKey}`
-      );
-      const newDriverData = driverRes.data;
-
-      if (newDriverData) {
-        const updatedDrivers = [...drivers, newDriverData];
-
-        await fetch(`/api/sessionData`, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({ type: "drivers", data: updatedDrivers }),
-        });
-
-        console.log("Driver data updated successfully.");
-      }
-    } catch (error) {
-      console.error("Error fetching or updating driver data:", error);
-    }
-  };
-
   const handleSessionSelect = async (sessionKey) => {
-    const base = "https://api.openf1.org/v1";
-
     try {
       const response = await fetch(`/api/sessionData?sessionKey=${sessionKey}`);
 
+      let positions;
       if (response.status === 200) {
-        const positions = await response.json();
-
-        const enrichedPositions = positions.map((position) => {
-          let driverData = drivers.find(
-            (driver) => driver.driver_number === position.driver_number && driver.meeting_key === position.meeting_key
-          );
-
-          if (!driverData) {
-            updateDriversData(position.driver_number, position.meeting_key);
-            driverData = { full_name: "Unknown", team_name: "Unknown", team_colour: "000000" };
-          }
-
-          return {
-            ...position,
-            driver_name: driverData?.full_name || "Unknown",
-            team_name: driverData?.team_name || "Unknown",
-            team_colour: `#${driverData?.team_colour}` || "#000000",
-          };
-        });
-
-        setSelectedSession({
-          sessionKey,
-          positions: enrichedPositions.sort((a, b) => a.position - b.position),
-        });
+        positions = await response.json();
       } else {
-        const posRes = await axios.get(`${base}/position?session_key=${sessionKey}`);
-        const positions = posRes.data;
+        const posRes = await axios.get(`${API_BASE}/position?session_key=${sessionKey}`);
+        positions = posRes.data;
 
         await fetch(`/api/sessionData`, {
           method: "POST",
@@ -114,45 +111,32 @@ export default function Home() {
           },
           body: JSON.stringify({ sessionKey, data: positions }),
         });
-
-        const finalPositions = {};
-        for (const entry of positions) {
-          const key = entry.driver_number;
-          if (!finalPositions[key] || new Date(entry.date) > new Date(finalPositions[key].date)) {
-            finalPositions[key] = entry;
-          }
-        }
-
-        const enrichedPositions = Object.values(finalPositions).map((position) => {
-          let driverData = drivers.find(
-            (driver) => driver.driver_number === position.driver_number && driver.meeting_key === position.meeting_key
-          );
-
-          if (!driverData) {
-            updateDriversData(position.driver_number, position.meeting_key);
-            driverData = { full_name: "Unknown", team_name: "Unknown", team_colour: "000000" };
-          }
-
-          return {
-            ...position,
-            driver_name: driverData?.full_name || "Unknown",
-            team_name: driverData?.team_name || "Unknown",
-            team_colour: `#${driverData?.team_colour}` || "#000000",
-          };
-        });
-
-        setSelectedSession({
-          sessionKey,
-          positions: enrichedPositions.sort((a, b) => a.position - b.position),
-        });
       }
+
+      const finalPositions = {};
+      for (const entry of positions) {
+        const key = entry.driver_number;
+        if (!finalPositions[key] || new Date(entry.date) > new Date(finalPositions[key].date)) {
+          finalPositions[key] = entry;
+        }
+      }
+
+      const enrichedPositions = await Promise.all(
+        Object.values(finalPositions).map((position) => enrichDriverData(position, position.meeting_key))
+      );
+
+      setSelectedSession({
+        sessionKey,
+        positions: enrichedPositions.sort((a, b) => a.position - b.position),
+      });
     } catch (error) {
       console.error("Error handling session select:", error);
     }
   };
 
-  console.log(sessions);
-  console.log(selectedSession);
+  console.log("Meetings:", meetings);
+  console.log("Sessions:", sessions);
+  console.log("Selected Session:", selectedSession);
 
   return (
     <div className="qualy-result-container">

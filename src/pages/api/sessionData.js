@@ -1,11 +1,22 @@
-import path from "path";
 import fs from "fs";
+import path from "path";
 
 export default function handler(req, res) {
   const { method } = req;
-  const { sessionKey, data } = req.body;
+  const { sessionKey } = req.query;
+  const { data } = req.body;
 
-  const filePath = path.join(process.cwd(), "src", "data", `session_${sessionKey}.json`);
+  if (method === "GET" && !sessionKey) {
+    return res.status(400).json({ message: "Invalid sessionKey." });
+  }
+
+  const resolvedSessionKey = method === "GET" ? sessionKey : data?.sessionKey;
+
+  if (!resolvedSessionKey) {
+    return res.status(400).json({ message: "Invalid sessionKey." });
+  }
+
+  const filePath = path.join(process.cwd(), "src", "data", `session_${resolvedSessionKey}.json`);
 
   if (method === "POST") {
     // Save session data
