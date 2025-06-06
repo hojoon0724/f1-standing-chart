@@ -25,7 +25,11 @@ body {
   font-family: Arial, Helvetica, sans-serif;
 }
 
-td {
+th,td {
   border: 1px solid black;
-  padding: 0.5rem 1rem;
+  padding: 0.5rem 0.5rem;
+}
+
+th {
+  min-width: 6.5ch;
 }
